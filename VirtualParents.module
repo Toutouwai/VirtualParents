@@ -1,0 +1,327 @@
+<?php
+// namespace ProcessWire;
+/**
+ * Virtual Parents
+ *
+ * @author Robin Sallis
+ *
+ * ProcessWire 3.x
+ * Copyright (C) 2011 by Ryan Cramer
+ * Licensed under GNU/GPL v2, see LICENSE.TXT
+ *
+ * http://www.processwire.com
+ * http://www.ryancramer.com
+ *
+ */
+
+class VirtualParents extends WireData implements Module, ConfigurableModule {
+
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Virtual Parents',
+			'version' => 1,
+			'author' => 'Robin Sallis',
+			'href' => 'https://github.com/Toutouwai/VirtualParents',
+			'summary' => 'Allows pages in Page List to be grouped under a virtual parent.',
+			'icon' => 'folder-open-o',
+			'autoload' => 'template=admin',
+		);
+	}
+
+	/**
+	 * Ready
+	 */
+	public function ready() {
+
+		// Disable/enable module from toggle
+		if($this->input->disable_vp !== null) {
+			$module_config = $this->modules->getModuleConfigData($this);
+			if((int) $this->input->disable_vp === 1) {
+				$module_config['disable_vp'] = 1;
+				$this->disable_vp = 1;
+			} else {
+				$module_config['disable_vp'] = 0;
+				$this->disable_vp = 0;
+			}
+			$this->modules->saveModuleConfigData($this, $module_config);
+		}
+
+		// If the module is not temporarily disabled
+		if(!$this->disable_vp) {
+			// Page tree manipulation
+			$this->addHookAfter('ProcessPageList::execute', $this, 'manipulatePageList');
+			$this->addHookAfter('ProcessPageList::executeNavJSON', $this, 'manipulateTreeMenu');
+			$this->addHookAfter('ProcessPageList::find', $this, 'virtualChildren');
+			$this->addHookBefore('ProcessPageSort::execute', $this, 'interceptSort');
+			$this->addHookBefore('ProcessPageAdd::execute', $this, 'changeAddParent');
+			$this->addHookAfter('ProcessPageAdd::getAllowedTemplates', $this, 'allowedTemplates');
+		}
+
+		$this->addHookAfter('ProcessPageList::execute', $this, 'vpToggle');
+
+	}
+
+	/**
+	 * Get the parent/child template pairs from the module config
+	 *
+	 * @return array;
+	 */
+	public function getConfig() {
+		$cfg = trim($this->parent_child_templates);
+		if(!$cfg) return array();
+		$cfg_lines = explode("\n", $cfg);
+		$cfg_templates = array();
+		foreach($cfg_lines as $cfg_line) {
+			$pieces = explode('=', $cfg_line);
+			if(count($pieces) < 2) continue;
+			$cfg_templates[$pieces[0]] = $pieces[1];
+		}
+		return $cfg_templates;
+	}
+
+	/**
+	 * Manipulate the page list JSON
+	 *
+	 * @param HookEvent $event
+	 */
+	public function manipulatePageList(HookEvent $event) {
+
+		$cfg_templates = $this->getConfig();
+		$pages = $this->pages;
+		if($this->config->ajax) {
+
+			$data = json_decode($event->return, true);
+			if(!isset($data['page'])) return;
+
+			$tree_changed = false;
+			foreach($cfg_templates as $parent_template => $child_template) {
+
+				$page = $pages->get($data['page']['id']);
+
+				// If the data root page is a virtual parent
+				if($data['page']['template'] === $parent_template) {
+					$virtual_child_count = $pages->count("parent=$page->parent, template=$child_template, include=all");
+					$data['page']['numChildren'] = $virtual_child_count;
+					$tree_changed = true;
+				}
+
+				// If there are one or more virtual parents and virtual children within the data children
+				$virtual_parent_count = $pages->count("parent=$page, template=$parent_template, include=all");
+				if(!$virtual_parent_count) continue;
+				$virtual_child_count = $pages->count("parent=$page, template=$child_template, include=all");
+				if(!$virtual_child_count) continue;
+				$parent_key = null;
+				$child_templates = explode('|', $child_template); // In case there is more than one child template
+				foreach($data['children'] as $key => $child) {
+					if($child['template'] === $parent_template) $parent_key = $key;
+					if(in_array($child['template'], $child_templates)) unset($data['children'][$key]);
+				}
+				$data['children'][$parent_key]['numChildren'] = $virtual_child_count;
+				$data['page']['numChildren'] -= $virtual_child_count;
+				$data['children'] = array_values($data['children']);
+				$tree_changed = true;
+
+			}
+			if($tree_changed) $event->return = json_encode($data);
+
+		} else {
+
+			// Manipulate 'numChildren' of virtual parent in 'openPageData'
+			$js_config = $this->config->js('ProcessPageList');
+			if($js_config && isset($js_config['openPageData'])) {
+				$config_changed = false;
+				foreach($js_config['openPageData'] as $key => $value) {
+					$id = (int) explode('-', $key)[0];
+					$page = $pages->get($id);
+					if(!$page->id) continue;
+					foreach($cfg_templates as $parent_template => $child_template) {
+						if($page->template == $parent_template) {
+							$virtual_child_count = $pages->count("parent=$page->parent, template=$child_template, include=all");
+							$js_config['openPageData'][$key]['page']['numChildren'] = $virtual_child_count;
+							$config_changed = true;
+						}
+					}
+				}
+				if($config_changed) $this->config->js('ProcessPageList', $js_config);
+			}
+
+		}
+	}
+
+	/**
+	 * Manipulate tree menu
+	 *
+	 * @param HookEvent $event
+	 */
+	public function manipulateTreeMenu(HookEvent $event) {
+		$cfg_templates = $this->getConfig();
+		$data = json_decode($event->return, true);
+		$pages = $this->pages;
+
+		$menu_changed = false;
+		foreach($cfg_templates as $parent_template => $child_template) {
+			// Get the parent of this level of the menu
+			$menu_parent = $pages->get((int) $data['list'][0]['id']);
+			if(!$menu_parent->id) return;
+			// Get the IDs of any virtual parents in this level, return if none
+			$parent_ids = $pages->findIDs("parent=$menu_parent, template=$parent_template, include=all");
+			if(!$parent_ids) return;
+			// Get the IDs of of any virtual children in this level, return if none
+			$child_ids = $pages->findIDs("parent=$menu_parent, template=$child_template, include=all");
+			if(!$child_ids) return;
+			$menu_changed = true;
+			$child_count = count($child_ids);
+			// Determine which array item is the virtual parent
+			$parent_key = null;
+			foreach($data['list'] as $key => $item) {
+				if(isset($item['id']) && in_array($item['id'], $parent_ids)) $parent_key = $key;
+			}
+			// Modify the virtual parent item to appear to have children
+			$data['list'][$parent_key]['navJSON'] = $this->config->urls->admin . 'page/list/navJSON/?parent_id=' . $data['list'][$parent_key]['id'];
+			$parent_label = str_replace(' &nbsp;', " <small>$child_count</small> &nbsp;", $data['list'][$parent_key]['label']);
+			$data['list'][$parent_key]['label'] = $parent_label;
+			// Remove virtual children from this level
+			foreach($data['list'] as $key => $item) {
+				if(isset($item['id']) && in_array($item['id'], $child_ids)) unset($data['list'][$key]);
+			}
+		}
+		$data['list'] = array_values($data['list']);
+
+		if($menu_changed) $event->return = json_encode($data);
+	}
+
+	/**
+	 * Return pages that are not actually children
+	 *
+	 * @param HookEvent $event
+	 */
+	public function virtualChildren(HookEvent $event) {
+		$selector_string = $event->arguments(0);
+		$page = $event->arguments(1);
+		$cfg_templates = $this->getConfig();
+
+		foreach($cfg_templates as $parent_template => $child_template) {
+			if($page->template != $parent_template) continue;
+			$event->return = $page->siblings("template=$child_template, include=all, $selector_string");
+			break;
+		}
+	}
+
+	/**
+	 * Intercept attempts to sort pages in the list
+	 *
+	 * @param HookEvent $event
+	 * @throws WirePermissionException
+	 */
+	public function interceptSort(HookEvent $event) {
+		$parent_id = (int) $this->input->post->parent_id;
+		$move_id = (int) $this->input->post->id;
+		$parent_page = $this->pages->get($parent_id);
+		$move_page = $this->pages->get($move_id);
+		$cfg_templates = $this->getConfig();
+		foreach($cfg_templates as $parent_template => $child_template) {
+			// If the parent is a virtual parent
+			if($parent_page->template == $parent_template) {
+				$child_templates = explode('|', $child_template); // In case there is more than one child template
+				if(!in_array($move_page->template->name, $child_templates)) {
+					// If the move page is not a virtual child, it is not allowed to move
+					throw new WirePermissionException($this->_('You do not have permission to sort pages using this parent') . ' - ' . $parent_page->path());
+				} else {
+					// Correct parent_id to the actual parent
+					$this->input->post->parent_id = $parent_page->parent->id;
+				}
+			}
+		}
+	}
+
+	/**
+	 * If an attempt is made to add a child to a virtual parent, change to the real parent
+	 *
+	 * @param HookEvent $event
+	 */
+	public function changeAddParent(HookEvent $event) {
+		$parent_id = (int) $this->input->post->parent_id;
+		if(!$parent_id) $parent_id = (int) $this->input->get->parent_id;
+		$parent = $this->pages->get($parent_id);
+
+		$cfg_templates = $this->getConfig();
+		foreach($cfg_templates as $parent_template => $child_template) {
+			if($parent->template == $parent_template) {
+				$this->session->redirect($this->config->urls->admin . "page/add/?parent_id={$parent->parent->id}&vp_allowed_templates=$child_template");
+			}
+		}
+	}
+
+	/**
+	 * If an attempt is made to add a child to a virtual parent, limit to the appropriate template(s)
+	 *
+	 * @param HookEvent $event
+	 */
+	public function allowedTemplates(HookEvent $event) {
+		$allowed_templates_str = $this->input->get->vp_allowed_templates;
+		if(!$allowed_templates_str) return;
+		$allowed_templates = array();
+		foreach(explode('|', $allowed_templates_str) as $template_name) {
+			$template = $this->templates->get($template_name);
+			if($template) $allowed_templates[$template->id] = $template;
+		}
+		$event->return = $allowed_templates;
+	}
+
+	/**
+	 * Add Virtual Parents on/off toggle
+	 *
+	 * @param HookEvent $event
+	 */
+	public function vpToggle(HookEvent $event) {
+		if($this->user->isSuperuser() && !$this->config->ajax) {
+			// Add stylesheet
+			$info = $this->getModuleInfo();
+			$version = (int) $info['version'];
+			$config = $this->config;
+			$config->styles->add($config->urls->$this . "{$this}.css?v=$version");
+
+			// Add module on/off toggle
+			$url = $this->input->url();
+			if($this->disable_vp) {
+				$icon = 'fa-toggle-on';
+				$query_string = $this->input->queryString(array('disable_vp' => 0));
+				$text = $this->_('Enable Virtual Parents');
+			} else {
+				$icon = 'fa-toggle-off';
+				$query_string = $this->input->queryString(array('disable_vp' => 1));
+				$text = $this->_('Disable Virtual Parents');
+			}
+			$out = "<a class='vp-toggle' href='{$url}?{$query_string}'><i class='fa $icon'></i> $text</a>";
+			$event->return .= $out;
+		}
+	}
+
+	/**
+	 * Config inputfields
+	 *
+	 * @param InputfieldWrapper $inputfields
+	 */
+	public function getModuleConfigInputfields($inputfields) {
+
+		/* @var InputfieldTextarea $f */
+		$f = $this->modules->InputfieldTextarea;
+		$f_name = 'parent_child_templates';
+		$f->name = $f_name;
+		$f->label = $this->_('Parent/child template pairs');
+		$f->description = $this->_("Enter pairs of parent/child template names in the form virtual_parent_template=virtual_child_template. \nIf needed you can specify multiple pipe-separated *child* templates: virtual_parent_template=child_template_1|child_template_2. \nOne pair of template names per line.");
+		$f->value = $this->$f_name;
+		$inputfields->add($f);
+
+		/* @var InputfieldCheckbox $f */
+		$f = $this->modules->InputfieldCheckbox;
+		$f_name = 'disable_vp';
+		$f->name = $f_name;
+		$f->label = $this->_('Disable Virtual Parents module');
+		$f->notes = $this->_('This option allows you to temporarily disable Virtual Parents to see the real structure in the page tree.');
+		$f->checked = $this->$f_name === 1 ? 'checked' : '';
+		$inputfields->add($f);
+
+	}
+
+}
