@@ -11,6 +11,7 @@ Why would you do that instead of actually putting the child pages inside the par
 ![Before](https://user-images.githubusercontent.com/1538852/31802366-53b79a16-b5aa-11e7-8b6a-8bd2e1361b87.png)
 
 #####Example of how the page structure appears with Virtual Parents activated
+
 ![After](https://user-images.githubusercontent.com/1538852/31802365-53858c4c-b5aa-11e7-91c2-ea145baa9349.png)
 
 ## How it works
