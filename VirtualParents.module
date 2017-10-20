@@ -310,6 +310,7 @@ class VirtualParents extends WireData implements Module, ConfigurableModule {
 		$f->name = $f_name;
 		$f->label = $this->_('Parent/child template pairs');
 		$f->description = $this->_("Enter pairs of parent/child template names in the form virtual_parent_template=virtual_child_template. \nIf needed you can specify multiple pipe-separated *child* templates: virtual_parent_template=child_template_1|child_template_2. \nOne pair of template names per line.");
+		$f->placeholder = $this->_('virtual_parent_template=virtual_child_template');
 		$f->value = $this->$f_name;
 		$inputfields->add($f);
 
