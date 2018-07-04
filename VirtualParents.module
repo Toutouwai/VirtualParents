@@ -19,7 +19,7 @@ class VirtualParents extends WireData implements Module, ConfigurableModule {
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Virtual Parents',
-			'version' => 1,
+			'version' => '0.1.1',
 			'author' => 'Robin Sallis',
 			'href' => 'https://github.com/Toutouwai/VirtualParents',
 			'summary' => 'Allows pages in Page List to be grouped under a virtual parent.',
@@ -116,7 +116,7 @@ class VirtualParents extends WireData implements Module, ConfigurableModule {
 					if($child['template'] === $parent_template) $parent_key = $key;
 					if(in_array($child['template'], $child_templates)) unset($data['children'][$key]);
 				}
-				$data['children'][$parent_key]['numChildren'] = $virtual_child_count;
+				if($parent_key) $data['children'][$parent_key]['numChildren'] = $virtual_child_count;
 				$data['page']['numChildren'] -= $virtual_child_count;
 				$data['children'] = array_values($data['children']);
 				$tree_changed = true;
@@ -191,7 +191,7 @@ class VirtualParents extends WireData implements Module, ConfigurableModule {
 	}
 
 	/**
-	 * Return pages that are not actually children
+	 * Return pages that are not actually children, or hide virtual children under their real parent
 	 *
 	 * @param HookEvent $event
 	 */
@@ -200,10 +200,17 @@ class VirtualParents extends WireData implements Module, ConfigurableModule {
 		$page = $event->arguments(1);
 		$cfg_templates = $this->getConfig();
 
+		$is_virtual_parent = false;
 		foreach($cfg_templates as $parent_template => $child_template) {
-			if($page->template != $parent_template) continue;
-			$event->return = $page->siblings("template=$child_template, include=all, $selector_string");
-			break;
+			if($page->template == $parent_template) {
+				$event->return = $page->siblings("template=$child_template, include=all, $selector_string");
+				$is_virtual_parent = true;
+				break;
+			}
+		}
+		if(!$is_virtual_parent) {
+			$child_templates = implode('|', $cfg_templates);
+			$event->return = $page->children("template!=$child_templates, $selector_string");
 		}
 	}
 
