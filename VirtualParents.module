@@ -19,7 +19,7 @@ class VirtualParents extends WireData implements Module, ConfigurableModule {
 	public static function getModuleInfo() {
 		return array(
 			'title' => 'Virtual Parents',
-			'version' => '0.1.1',
+			'version' => '0.1.2',
 			'author' => 'Robin Sallis',
 			'href' => 'https://github.com/Toutouwai/VirtualParents',
 			'summary' => 'Allows pages in Page List to be grouped under a virtual parent.',
@@ -116,7 +116,7 @@ class VirtualParents extends WireData implements Module, ConfigurableModule {
 					if($child['template'] === $parent_template) $parent_key = $key;
 					if(in_array($child['template'], $child_templates)) unset($data['children'][$key]);
 				}
-				if($parent_key) $data['children'][$parent_key]['numChildren'] = $virtual_child_count;
+				if(!is_null($parent_key)) $data['children'][$parent_key]['numChildren'] = $virtual_child_count;
 				$data['page']['numChildren'] -= $virtual_child_count;
 				$data['children'] = array_values($data['children']);
 				$tree_changed = true;
