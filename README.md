@@ -1,6 +1,6 @@
 # Virtual Parents
 
-A module for ProcessWire CMS/CMF. Allows pages in Page List to be grouped under a virtual parent.
+An experimental module for ProcessWire CMS/CMF. Allows pages in Page List to be grouped under a virtual parent. 
 
 This module manipulates the page list and the flyout tree menu to make it appear that one or more pages are children of another page when in fact they are siblings of that page.
 
